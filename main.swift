@@ -4,16 +4,28 @@ struct Limit { let label: String; let percent: Double; let resets: Date? }
 
 // MARK: - Data
 
+// Reads the Claude Code login directly via the Security framework, so the Keychain
+// access list names this app rather than the generic `security` command-line tool.
 func readToken() -> String? {
-    let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-    p.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
-    let pipe = Pipe(); p.standardOutput = pipe; p.standardError = Pipe()
-    guard (try? p.run()) != nil else { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
-    guard let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "Claude Code-credentials",
+        kSecReturnData as String: true,
+        kSecMatchLimit as String: kSecMatchLimitOne,
+    ]
+    var out: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data,
+          let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let c = o["claudeAiOauth"] as? [String: Any] else { return nil }
-    return c["accessToken"] as? String
+    return c["accessToken"] as? String   // the refresh token in the same item is never used
 }
+
+// Never follow redirects, so the bearer token can only ever go to the URL we asked for.
+final class NoRedirect: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ s: URLSession, task: URLSessionTask, willPerformHTTPRedirection r: HTTPURLResponse,
+                    newRequest: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+}
+let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
 
 func parseDate(_ s: String?) -> Date? {
     guard let s = s else { return nil }
@@ -27,7 +39,7 @@ func fetchUsage(_ done: @escaping (Result<[Limit], Error>) -> Void) {
     var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!, timeoutInterval: 15)
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-    URLSession.shared.dataTask(with: req) { data, resp, err in
+    session.dataTask(with: req) { data, resp, err in
         if let err = err { return done(.failure(err)) }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200, let data = data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {

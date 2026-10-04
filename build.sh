@@ -15,4 +15,8 @@ cat > $APP/Contents/Info.plist <<P
 <key>LSUIElement</key><true/>
 </dict></plist>
 P
-echo "Built $APP"
+# Sign with a stable identity (so a Keychain "Always Allow" survives rebuilds) and the hardened runtime.
+# Override with CODESIGN_IDENTITY; falls back to the first Apple Development cert, then ad-hoc.
+ID="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)}"
+codesign --force --options runtime --sign "${ID:--}" $APP
+echo "Built $APP (signed: ${ID:-ad-hoc})"
