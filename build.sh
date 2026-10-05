@@ -11,6 +11,7 @@ cat > $APP/Contents/Info.plist <<P
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>ClaudeUsageBar</string>
 <key>CFBundleIdentifier</key><string>local.claudeusagebar</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleName</key><string>ClaudeUsageBar</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSUIElement</key><true/>
