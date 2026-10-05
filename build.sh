@@ -2,7 +2,8 @@
 set -e
 cd "$(dirname "$0")"
 APP=ClaudeUsageBar.app
-rm -rf $APP; mkdir -p $APP/Contents/MacOS
+rm -rf $APP; mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
+cp AppIcon.icns $APP/Contents/Resources/
 swiftc -O main.swift -o $APP/Contents/MacOS/ClaudeUsageBar
 cat > $APP/Contents/Info.plist <<P
 <?xml version="1.0" encoding="UTF-8"?>

@@ -9,7 +9,7 @@ DEST="${INSTALL_DIR:-$HOME/Applications}"
 pkill -x ClaudeUsageBar 2>/dev/null || true
 mkdir -p "$DEST"
 rm -rf "$DEST/ClaudeUsageBar.app"
-cp -R ClaudeUsageBar.app "$DEST/"
+mv ClaudeUsageBar.app "$DEST/"   # move, so only one copy shows up in Launchpad/Spotlight
 open "$DEST/ClaudeUsageBar.app"
 echo "Installed to $DEST/ClaudeUsageBar.app"
 echo "To start at login: System Settings > General > Login Items > add ClaudeUsageBar."
