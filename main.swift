@@ -113,6 +113,8 @@ class App: NSObject, NSApplicationDelegate {
     }
 
     @objc func refresh() {
+        // An accessory app is never frontmost, so the Keychain prompt can open behind other windows.
+        NSApp.activate(ignoringOtherApps: true)
         fetchUsage { r in DispatchQueue.main.async { self.render(r) } }
     }
 
