@@ -5,6 +5,7 @@ struct Limit { let label: String; let percent: Double; let resets: Date? }
 // MARK: - Data
 
 struct E: LocalizedError { let errorDescription: String? }
+let expiredText = "Login expired. Start a Claude Code session to renew it."
 
 // Reads the Claude Code login directly via the Security framework, so the Keychain
 // access list names this app rather than the generic `security` command-line tool.
@@ -24,8 +25,9 @@ func readToken(interactive: Bool) -> Result<String, E> {
     switch status {
     case errSecSuccess: break
     case errSecItemNotFound: return .failure(E(errorDescription: "No Claude Code login found. Run `claude` and sign in."))
+    // Claude Code rewrites this item whenever it renews the login, which drops this app's "Always Allow".
     case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
-        return .failure(E(errorDescription: "Keychain access needed. Click Refresh to allow it."))
+        return .failure(E(errorDescription: "Keychain access needed (Claude Code renewed its login). Click Refresh to allow it."))
     default: return .failure(E(errorDescription: "Keychain error \(status). Click Refresh to retry."))
     }
     guard let data = out as? Data,
@@ -35,8 +37,9 @@ func readToken(interactive: Bool) -> Result<String, E> {
         return .failure(E(errorDescription: "Couldn't read the Claude Code login. Run `claude` and sign in."))
     }
     // Only Claude Code renews the token, so after a long idle stretch it may simply be stale.
+    // Refresh here can't fix that; the user has to start a Claude Code session.
     if let ms = c["expiresAt"] as? Double, Date(timeIntervalSince1970: ms / 1000) < Date() {
-        return .failure(E(errorDescription: "Login expired. Open Claude Code to refresh it."))
+        return .failure(E(errorDescription: expiredText))
     }
     return .success(token)
 }
@@ -67,7 +70,7 @@ func fetchUsage(interactive: Bool, _ done: @escaping (Result<[Limit], Error>) ->
         if let err = err { return done(.failure(err)) }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200, let data = data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return done(.failure(E(errorDescription: code == 401 ? "Login expired. Open Claude Code to refresh it." : "Usage request failed (HTTP \(code))")))
+            return done(.failure(E(errorDescription: code == 401 ? expiredText : "Usage request failed (HTTP \(code))")))
         }
         func limit(_ key: String, _ label: String) -> Limit? {
             guard let d = o[key] as? [String: Any], let u = d["utilization"] as? Double else { return nil }
@@ -85,7 +88,8 @@ func color(_ pct: Double) -> NSColor { .systemBlue }
 func resetText(_ d: Date?) -> String {
     guard let d = d else { return "" }
     let f = DateFormatter()
-    f.dateFormat = d.timeIntervalSinceNow < 20 * 3600 ? "h:mm a" : "EEEE h:mm a"
+    // A bare time is only unambiguous when it's later today.
+    f.dateFormat = Calendar.current.isDateInToday(d) ? "h:mm a" : "EEEE h:mm a"
     return "Resets " + f.string(from: d)
 }
 
@@ -167,6 +171,10 @@ class App: NSObject, NSApplicationDelegate {
             item.button?.title = "⚠︎"
             m.addItem(withTitle: e.localizedDescription, action: nil, keyEquivalent: "")
         }
+        // A Refresh that hits the same error looks like it did nothing, so show when the last check ran.
+        let f = DateFormatter(); f.dateFormat = "h:mm:ss a"
+        let checked = m.addItem(withTitle: "Checked " + f.string(from: Date()), action: nil, keyEquivalent: "")
+        checked.isEnabled = false
         m.addItem(.separator())
         m.addItem(withTitle: "Refresh", action: #selector(refresh), keyEquivalent: "r").target = self
         m.addItem(withTitle: "Open usage page", action: #selector(openPage), keyEquivalent: "").target = self
