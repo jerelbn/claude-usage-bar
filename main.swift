@@ -4,9 +4,13 @@ struct Limit { let label: String; let percent: Double; let resets: Date? }
 
 // MARK: - Data
 
+struct E: LocalizedError { let errorDescription: String? }
+
 // Reads the Claude Code login directly via the Security framework, so the Keychain
 // access list names this app rather than the generic `security` command-line tool.
-func readToken() -> String? {
+// With `interactive` false, a read that would need a Keychain prompt fails instead of showing one,
+// so background refreshes never pop up a dialog or pull focus.
+func readToken(interactive: Bool) -> Result<String, E> {
     let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: "Claude Code-credentials",
@@ -14,10 +18,27 @@ func readToken() -> String? {
         kSecMatchLimit as String: kSecMatchLimitOne,
     ]
     var out: CFTypeRef?
-    guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess, let data = out as? Data,
+    SecKeychainSetUserInteractionAllowed(interactive)
+    let status = SecItemCopyMatching(query as CFDictionary, &out)
+    SecKeychainSetUserInteractionAllowed(true)
+    switch status {
+    case errSecSuccess: break
+    case errSecItemNotFound: return .failure(E(errorDescription: "No Claude Code login found. Run `claude` and sign in."))
+    case errSecInteractionNotAllowed, errSecAuthFailed, errSecUserCanceled:
+        return .failure(E(errorDescription: "Keychain access needed. Click Refresh to allow it."))
+    default: return .failure(E(errorDescription: "Keychain error \(status). Click Refresh to retry."))
+    }
+    guard let data = out as? Data,
           let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let c = o["claudeAiOauth"] as? [String: Any] else { return nil }
-    return c["accessToken"] as? String   // the refresh token in the same item is never used
+          let c = o["claudeAiOauth"] as? [String: Any],
+          let token = c["accessToken"] as? String else {   // the refresh token in the same item is never used
+        return .failure(E(errorDescription: "Couldn't read the Claude Code login. Run `claude` and sign in."))
+    }
+    // Only Claude Code renews the token, so after a long idle stretch it may simply be stale.
+    if let ms = c["expiresAt"] as? Double, Date(timeIntervalSince1970: ms / 1000) < Date() {
+        return .failure(E(errorDescription: "Login expired. Open Claude Code to refresh it."))
+    }
+    return .success(token)
 }
 
 // Never follow redirects, so the bearer token can only ever go to the URL we asked for.
@@ -33,9 +54,12 @@ func parseDate(_ s: String?) -> Date? {
     return f.date(from: s) ?? ISO8601DateFormatter().date(from: s)
 }
 
-func fetchUsage(_ done: @escaping (Result<[Limit], Error>) -> Void) {
-    struct E: LocalizedError { let errorDescription: String? }
-    guard let token = readToken() else { return done(.failure(E(errorDescription: "No Claude Code login found. Run `claude` and sign in."))) }
+func fetchUsage(interactive: Bool, _ done: @escaping (Result<[Limit], Error>) -> Void) {
+    let token: String
+    switch readToken(interactive: interactive) {
+    case .success(let t): token = t
+    case .failure(let e): return done(.failure(e))
+    }
     var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!, timeoutInterval: 15)
     req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -108,14 +132,21 @@ class App: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         item.button?.title = "Claude …"
-        refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in self?.refresh() }
+        load(interactive: true)   // first launch: let the Keychain prompt appear
+        timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in self?.load(interactive: false) }
+        // After sleep the network takes a moment to come back, so wait briefly before refreshing.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { self?.load(interactive: false) }
+        }
     }
 
-    @objc func refresh() {
+    // Only a user-initiated refresh may show the Keychain prompt and bring the app forward.
+    @objc func refresh() { load(interactive: true) }
+
+    func load(interactive: Bool) {
         // An accessory app is never frontmost, so the Keychain prompt can open behind other windows.
-        NSApp.activate(ignoringOtherApps: true)
-        fetchUsage { r in DispatchQueue.main.async { self.render(r) } }
+        if interactive { NSApp.activate(ignoringOtherApps: true) }
+        fetchUsage(interactive: interactive) { r in DispatchQueue.main.async { self.render(r) } }
     }
 
     func render(_ r: Result<[Limit], Error>) {
