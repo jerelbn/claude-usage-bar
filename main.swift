@@ -5,7 +5,11 @@ struct Limit { let label: String; let percent: Double; let resets: Date? }
 // MARK: - Data
 
 struct E: LocalizedError { let errorDescription: String? }
-let expiredText = "Login expired. Start a Claude Code session to renew it."
+// Only Claude Code renews its login, so say so: otherwise Refresh looks like it should fix this.
+func expiredText(_ at: Date? = nil) -> String {
+    let when = at.map { " " + RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()) } ?? ""
+    return "Claude Code login expired\(when). Use Claude Code to renew it, then click Refresh."
+}
 
 // Reads the Claude Code login directly via the Security framework, so the Keychain
 // access list names this app rather than the generic `security` command-line tool.
@@ -38,8 +42,8 @@ func readToken(interactive: Bool) -> Result<String, E> {
     }
     // Only Claude Code renews the token, so after a long idle stretch it may simply be stale.
     // Refresh here can't fix that; the user has to start a Claude Code session.
-    if let ms = c["expiresAt"] as? Double, Date(timeIntervalSince1970: ms / 1000) < Date() {
-        return .failure(E(errorDescription: expiredText))
+    if let at = (c["expiresAt"] as? Double).map({ Date(timeIntervalSince1970: $0 / 1000) }), at < Date() {
+        return .failure(E(errorDescription: expiredText(at)))
     }
     return .success(token)
 }
@@ -70,7 +74,7 @@ func fetchUsage(interactive: Bool, _ done: @escaping (Result<[Limit], Error>) ->
         if let err = err { return done(.failure(err)) }
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200, let data = data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return done(.failure(E(errorDescription: code == 401 ? expiredText : "Usage request failed (HTTP \(code))")))
+            return done(.failure(E(errorDescription: code == 401 ? expiredText() : "Usage request failed (HTTP \(code))")))
         }
         func limit(_ key: String, _ label: String) -> Limit? {
             guard let d = o[key] as? [String: Any], let u = d["utilization"] as? Double else { return nil }
